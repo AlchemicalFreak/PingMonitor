@@ -1,0 +1,18 @@
+# PyInstaller output
+/dist/
+/build/
+
+# Logs
+*.log
+monitor_data/
+
+# Installer output
+/installer/*.exe
+
+# Cache
+__pycache__/
+*.pyc
+
+# System files
+.DS_Store
+Thumbs.db
