@@ -28,6 +28,8 @@ from pathlib import Path
 from typing import List, Dict, Optional, Tuple
 
 from PyQt6 import QtWidgets, QtGui, QtCore
+from PyQt6.QtGui import QIcon
+
 
 # ---------------------------
 # Конфіг та Telegram (вставлено)
@@ -35,7 +37,7 @@ from PyQt6 import QtWidgets, QtGui, QtCore
 TELEGRAM_TOKEN = "8446791342:AAFo1iHvk6dmquwtr3AJ2BcD-9mIxUzCC00"
 CHAT_ID = "-1003368463307"
 
-CURRENT_VERSION = "1.0.0"
+CURRENT_VERSION = "1.0.1"
 UPDATE_JSON_URL = "https://raw.githubusercontent.com/AlchemicalFreak/PingMonitor/main/version.json"
 
 # ---------------------------
@@ -332,10 +334,10 @@ class MonitorThread(QtCore.QThread):
 class MainWindow(QtWidgets.QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("PingMonitor — Панель моніторингу")
+        self.setWindowTitle(f"Панель моніторингу — PingMonitor v{CURRENT_VERSION}")
         try:
             if ICON_FILE.exists():
-                self.setWindowIcon(QtGui.QIcon(str(ICON_FILE)))
+                self.setWindowTitle(f"Панель моніторингу — PingMonitor v{CURRENT_VERSION}")
         except Exception:
             pass
         self.resize(1024, 680)
@@ -850,6 +852,7 @@ def download_update(url: str) -> Optional[str]:
 def main():
     ensure_default_config()
     app = QtWidgets.QApplication(sys.argv)
+    app.setWindowIcon(QIcon("icon.ico"))
     win = MainWindow()
     win.show()
     sys.exit(app.exec())

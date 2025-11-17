@@ -1,5 +1,5 @@
 {
-  "version": "1.0.0",
-  "download_url": "https://github.com/AlchemicalFreak/PingMonitor/releases/latest/download/PingMonitor.exe",
-  "changelog": "Initial public release"
+  "version": "1.0.1",
+  "download_url": "https://github.com/AlchemicalFreak/PingMonitor/releases/download/1.0.1/PingMonitorSetup.exe",
+  "changelog": "- Виправлено баги\n- Покращено автооновлення"
 }
