@@ -1,24 +1,6 @@
 {
-  "ips": [
-    {
-      "group": "БУВ",
-      "ip": "10.0.5.105",
-      "note": "Цукрова вагова"
-    },
-    {
-      "group": "Табло",
-      "ip": "10.0.5.151",
-      "note": "Табло Буфер"
-    },
-    {
-      "group": "ПК",
-      "ip": "WS-ZP-OF-IT-02",
-      "note": "Луцик О.В."
-    },
-    {
-      "group": "Реєстратор",
-      "ip": "10.0.5.92",
-      "note": "Реєстратор БРУТТО_IN (БУВ Буряк Брутто-ТМЦ)"
-    }
-  ]
+    "theme": "dark",
+    "auto_update": true,
+    "minimize_to_tray": true,
+    "telegram_notifications": true
 }
