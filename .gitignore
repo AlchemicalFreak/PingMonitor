@@ -16,3 +16,8 @@ __pycache__/
 # System files
 .DS_Store
 Thumbs.db
+
+monitor_data/targets.json
+monitor_data/telegram_token.sec
+monitor_data/telegram_chatid.txt
+monitor_data/logs/

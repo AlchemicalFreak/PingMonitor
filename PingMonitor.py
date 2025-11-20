@@ -1,15 +1,12 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-
 """
-PingMonitor.py — фінальна версія
-- PyQt6 GUI (українська)
-- групи, примітки, пошук
-- Telegram повідомлення (async)
-- пінг (IPv4, fallback IPv6), без мерехтіння консолі на Windows
-- автоматичне оновлення через GitHub Releases (version.json)
-- збереження конфігу в %APPDATA%/PingMonitor
-- готово для PyInstaller (--onefile --noconsole --icon=icon.ico)
+PingMonitor v1.0.2
+- UI: theme icon + telegram icon top-right
+- Buttons: dim default borders, bright on hover per user colors
+- Clear log placed right of Stop
+- Removed title above IP field
+- Auto-update via version.json
 """
 
 from __future__ import annotations
@@ -21,29 +18,24 @@ import time
 import threading
 import tempfile
 import requests
-import shutil
-import traceback
 from datetime import datetime
 from pathlib import Path
-from typing import List, Dict, Optional, Tuple
+from typing import Optional, Dict, Tuple
 
 from PyQt6 import QtWidgets, QtGui, QtCore
 from PyQt6.QtGui import QIcon
 from PyQt6.QtWidgets import QMessageBox, QApplication
 
 # ---------------------------
-# Конфіг та Telegram (вставлено)
+# Configs
 # ---------------------------
 TELEGRAM_TOKEN = "8446791342:AAFo1iHvk6dmquwtr3AJ2BcD-9mIxUzCC00"
 CHAT_ID = "-1003368463307"
 
-# оновлена поточна версія (заміни на потрібну в майбутньому)
-CURRENT_VERSION = "1.0.1"
+CURRENT_VERSION = "1.0.2"
 UPDATE_JSON_URL = "https://raw.githubusercontent.com/AlchemicalFreak/PingMonitor/main/version.json"
 
-# ---------------------------
-# Шляхи
-# ---------------------------
+# Paths
 APPDATA_ENV = os.getenv("APPDATA")
 if APPDATA_ENV:
     APP_DIR = Path(APPDATA_ENV) / "PingMonitor"
@@ -54,11 +46,13 @@ APP_DIR.mkdir(parents=True, exist_ok=True)
 CONFIG_FILE = APP_DIR / "config.json"
 GROUP_COLORS_FILE = APP_DIR / "group_colors.json"
 LOG_FILE = APP_DIR / "monitor.log"
-ICON_FILE = Path(__file__).parent / "icon.ico"
+BASE_DIR = Path(__file__).parent
+ICON_FILE = BASE_DIR / "icon.ico"
+TELEGRAM_ICON = BASE_DIR / "telegram.ico"
+LIGHT_THEME_ICON = BASE_DIR / "lighttheme.ico"
+DARK_THEME_ICON = BASE_DIR / "darktheme.ico"
 
-# ---------------------------
-# Дефолтні групи / кольори
-# ---------------------------
+# Defaults
 DEFAULT_GROUPS = ["Сервер", "БУВ", "Камера", "ПК", "Принтер", "Табло", "Реєстратор"]
 DEFAULT_GROUP_COLORS = {
     "Табло": "#FFEFD5",
@@ -70,8 +64,13 @@ DEFAULT_GROUP_COLORS = {
     "ПК": "#C080FF"
 }
 
+# Hover colors requested
+HOVER_GREEN = "#00ff08"
+HOVER_YELLOW = "#fff700"
+HOVER_RED = "#ff0000"
+
 # ---------------------------
-# Утиліти
+# Utilities
 # ---------------------------
 def now_ts() -> str:
     return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -84,9 +83,6 @@ def write_log(line: str):
     except Exception:
         pass
 
-# ---------------------------
-# Конфіг load/save
-# ---------------------------
 def ensure_default_config():
     if not CONFIG_FILE.exists():
         cfg = {"entries": [], "ping_interval": 5, "ping_timeout": 1}
@@ -99,16 +95,9 @@ def load_config() -> Dict:
     try:
         with open(CONFIG_FILE, "r", encoding="utf-8") as f:
             cfg = json.load(f)
-        if "entries" not in cfg:
-            cfg["entries"] = []
-        if "ping_interval" not in cfg:
-            cfg["ping_interval"] = 5
-        if "ping_timeout" not in cfg:
-            cfg["ping_timeout"] = 1
-        return cfg
-    except Exception as e:
-        write_log(f"Помилка load_config: {e}")
-        return {"entries": [], "ping_interval": 5, "ping_timeout": 1}
+    except Exception:
+        cfg = {"entries": [], "ping_interval": 5, "ping_timeout": 1}
+    return cfg
 
 def save_config(cfg: Dict):
     try:
@@ -122,12 +111,10 @@ def load_group_colors() -> Dict[str, str]:
         if GROUP_COLORS_FILE.exists():
             with open(GROUP_COLORS_FILE, "r", encoding="utf-8") as f:
                 return json.load(f)
-        else:
-            save_group_colors(DEFAULT_GROUP_COLORS)
-            return DEFAULT_GROUP_COLORS.copy()
-    except Exception as e:
-        write_log(f"Помилка load_group_colors: {e}")
-        return DEFAULT_GROUP_COLORS.copy()
+    except Exception:
+        pass
+    save_group_colors(DEFAULT_GROUP_COLORS)
+    return DEFAULT_GROUP_COLORS.copy()
 
 def save_group_colors(data: Dict[str, str]):
     try:
@@ -137,7 +124,7 @@ def save_group_colors(data: Dict[str, str]):
         write_log(f"Помилка save_group_colors: {e}")
 
 # ---------------------------
-# Telegram: синхронний і async wrapper
+# Telegram
 # ---------------------------
 def send_telegram(text: str) -> bool:
     if not TELEGRAM_TOKEN or not CHAT_ID:
@@ -166,8 +153,7 @@ def send_telegram_async(text: str):
     threading.Thread(target=_t, daemon=True).start()
 
 # ---------------------------
-# Ping: IPv4 then IPv6 fallback; no console on Windows
-# returns (ok: bool, rtt_ms: Optional[int], used_addr: Optional[str])
+# Ping helper
 # ---------------------------
 def ping_host(addr: str, timeout_s: float = 1.0) -> Tuple[bool, Optional[int], Optional[str]]:
     start = time.time()
@@ -181,12 +167,11 @@ def ping_host(addr: str, timeout_s: float = 1.0) -> Tuple[bool, Optional[int], O
                              timeout=timeout_s + 1, creationflags=creationflags)
         elapsed_ms = int((time.time() - start) * 1000)
         if res.returncode == 0:
-            used = parse_ip_from_ping_stdout(res.stdout)
-            return True, elapsed_ms, used
+            return True, elapsed_ms, addr
     except Exception as e:
-        write_log(f"ping_host exception (default) for {addr}: {e}")
+        write_log(f"ping default exception: {e}")
 
-    # IPv6 fallback
+    # Try IPv6
     try:
         if sys.platform.startswith("win"):
             cmd6 = ["ping", "-6", "-n", "1", "-w", str(int(timeout_s * 1000)), addr]
@@ -197,37 +182,17 @@ def ping_host(addr: str, timeout_s: float = 1.0) -> Tuple[bool, Optional[int], O
                               timeout=timeout_s + 1, creationflags=creationflags)
         elapsed6 = int((time.time() - start2) * 1000)
         if res6.returncode == 0:
-            used6 = parse_ip_from_ping_stdout(res6.stdout)
-            return True, elapsed6, used6
+            return True, elapsed6, addr
     except Exception as e:
-        write_log(f"ping_host exception (ipv6) for {addr}: {e}")
+        write_log(f"ping ipv6 exception: {e}")
 
     return False, None, None
 
-def parse_ip_from_ping_stdout(text: str) -> Optional[str]:
-    try:
-        import re
-        m = re.search(r"\[([0-9a-fA-F:\.]+)%?\d*\]", text)
-        if m:
-            return m.group(1)
-        m2 = re.search(r"\(([0-9a-fA-F:\.]+)\)", text)
-        if m2:
-            return m2.group(1)
-        m3 = re.search(r"([0-9]{1,3}(?:\.[0-9]{1,3}){3})", text)
-        if m3:
-            return m3.group(1)
-        m4 = re.search(r"([0-9a-fA-F:]{2,})", text)
-        if m4:
-            return m4.group(1)
-    except Exception:
-        pass
-    return None
-
 # ---------------------------
-# MonitorThread
+# Monitor Thread
 # ---------------------------
 class MonitorThread(QtCore.QThread):
-    updated = QtCore.pyqtSignal(str, str, object)  # ip, state, rtt_ms
+    updated = QtCore.pyqtSignal(str, str, object)
     log = QtCore.pyqtSignal(str)
 
     def __init__(self, get_entries_callable, interval_sec: float = 5.0, timeout_s: float = 1.0):
@@ -236,7 +201,7 @@ class MonitorThread(QtCore.QThread):
         self.interval = interval_sec
         self.timeout = timeout_s
         self._running = False
-        self.last_state: Dict[str, Optional[bool]] = {}
+        self.last_state = {}
 
     def run(self):
         self._running = True
@@ -253,22 +218,19 @@ class MonitorThread(QtCore.QThread):
             entries = list(self.get_entries())
             if not entries:
                 for _ in range(int(self.interval * 10)):
-                    if not self._running:
-                        break
+                    if not self._running: break
                     time.sleep(0.1)
                 continue
 
             for e in entries:
-                if not self._running:
-                    break
+                if not self._running: break
                 ip = e.get("ip")
-                if not ip:
-                    continue
+                if not ip: continue
                 try:
                     ok, rtt, used = ping_host(ip, timeout_s=self.timeout)
                 except Exception as ex:
                     ok, rtt, used = False, None, None
-                    write_log(f"ping error for {ip}: {ex}")
+                    write_log(f"ping error {ip}: {ex}")
 
                 prev = self.last_state.get(ip)
                 if prev is None:
@@ -278,30 +240,25 @@ class MonitorThread(QtCore.QThread):
                 elif prev != ok:
                     self.last_state[ip] = ok
                     state = "ONLINE" if ok else "OFFLINE"
-                    msg = (
-                        f"{'🟢' if ok else '🔴'} {ip} змінив статус:\n"
-                        f"Статус: {'ONLINE' if ok else 'OFFLINE'}\n"
-                        f"Час: {now_ts()}"
-                    )
+                    msg = (f"{'🟢' if ok else '🔴'} {ip} змінив статус:\n"
+                           f"Статус: {'ONLINE' if ok else 'OFFLINE'}\nЧас: {now_ts()}")
                     try:
                         write_log(msg)
                         self.log.emit(msg)
                         send_telegram_async(msg)
                     except Exception as ex:
-                        write_log(f"Error sending telegram on change: {ex}")
+                        write_log(f"send telegram on change error: {ex}")
                     self.updated.emit(ip, state, rtt)
                 else:
                     state = "ONLINE" if ok else "OFFLINE"
                     self.updated.emit(ip, state, rtt)
 
                 for _ in range(3):
-                    if not self._running:
-                        break
+                    if not self._running: break
                     time.sleep(0.02)
 
             for _ in range(int(self.interval * 10)):
-                if not self._running:
-                    break
+                if not self._running: break
                 time.sleep(0.1)
 
     def stop(self):
@@ -309,18 +266,24 @@ class MonitorThread(QtCore.QThread):
         self.wait(2000)
 
 # ---------------------------
-# UI: MainWindow
+# MainWindow
 # ---------------------------
+class IconButton(QtWidgets.QToolButton):
+    def __init__(self, icon_path: Path, size: int = 28):
+        super().__init__()
+        self.setIcon(QIcon(str(icon_path)) if icon_path.exists() else QIcon())
+        self.setIconSize(QtCore.QSize(size, size))
+        self.setAutoRaise(True)
+        self.setCursor(QtCore.Qt.CursorShape.PointingHandCursor)
+        # style will be applied by parent stylesheet
+
 class MainWindow(QtWidgets.QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle(f"Панель моніторингу — PingMonitor v{CURRENT_VERSION}")
-        try:
-            if ICON_FILE.exists():
-                self.setWindowIcon(QIcon(str(ICON_FILE)))
-        except Exception:
-            pass
+        self.current_theme = "dark"  # initialize before UI build
+        self.setWindowIcon(QIcon(str(ICON_FILE)) if ICON_FILE.exists() else QIcon())
         self.resize(1024, 680)
+        self.setWindowTitle("PingMonitor v1.0.2")
 
         # state
         self.cfg = load_config()
@@ -330,23 +293,24 @@ class MainWindow(QtWidgets.QMainWindow):
                 self.group_colors[g] = DEFAULT_GROUP_COLORS.get(g, "#DDDDDD")
         save_group_colors(self.group_colors)
 
-        self.monitor_thread: Optional[MonitorThread] = None
-        self.status_map: Dict[str, bool] = {}
+        self.monitor_thread = None
+        self.status_map = {}
 
-        # build UI
+        # UI
         self._build_ui()
         self._load_entries_into_table()
 
+        # prepare thread (not started)
         interval = self.cfg.get("ping_interval", 5)
         timeout = self.cfg.get("ping_timeout", 1)
         self.monitor_thread = MonitorThread(self._get_entries, interval_sec=interval, timeout_s=timeout)
         self.monitor_thread.updated.connect(self._on_update_from_thread)
         self.monitor_thread.log.connect(self._append_log)
 
-        self.current_theme = "dark"
+        # apply theme
         self.apply_dark_theme()
 
-        # auto-update
+        # auto update check shortly after start
         QtCore.QTimer.singleShot(1500, self.auto_update_check)
 
     def _build_ui(self):
@@ -356,39 +320,63 @@ class MainWindow(QtWidgets.QMainWindow):
         v.setContentsMargins(10,10,10,10)
         v.setSpacing(8)
 
-        top = QtWidgets.QHBoxLayout()
+        # Top row: left fields + right icons
+        top_row = QtWidgets.QHBoxLayout()
+        # left: group combo, ip, note, add, delete
+        left = QtWidgets.QHBoxLayout()
         self.combo_group = QtWidgets.QComboBox()
         for g in sorted(DEFAULT_GROUPS):
             self.combo_group.addItem(g)
         extra = sorted(set([e.get("group","") for e in self.cfg.get("entries", [])]) - set(DEFAULT_GROUPS))
         for g in extra:
-            if g:
-                self.combo_group.addItem(g)
+            if g: self.combo_group.addItem(g)
 
         self.input_ip = QtWidgets.QLineEdit(); self.input_ip.setPlaceholderText("IP або hostname")
         self.input_ip.setFixedWidth(300)
         self.input_note = QtWidgets.QLineEdit(); self.input_note.setPlaceholderText("Примітка")
         self.input_note.setFixedWidth(300)
 
-        self.btn_add = QtWidgets.QPushButton("Додати")
-        self.btn_delete = QtWidgets.QPushButton("Видалити")
+        self.btn_add = QtWidgets.QPushButton("Додати"); self.btn_add.setObjectName("add")
+        self.btn_delete = QtWidgets.QPushButton("Видалити"); self.btn_delete.setObjectName("delete")
         self.btn_add.clicked.connect(self.on_add)
         self.btn_delete.clicked.connect(self.on_delete_selected)
 
-        top.addWidget(self.combo_group)
-        top.addWidget(self.input_ip)
-        top.addWidget(self.input_note)
-        top.addWidget(self.btn_add)
-        top.addWidget(self.btn_delete)
-        top.addStretch()
-        v.addLayout(top)
+        left.addWidget(self.combo_group)
+        left.addWidget(self.input_ip)
+        left.addWidget(self.input_note)
+        left.addWidget(self.btn_add)
+        left.addWidget(self.btn_delete)
+        left.addStretch()
 
+        top_row.addLayout(left)
+
+        # right: theme icon + telegram icon
+        right = QtWidgets.QHBoxLayout()
+        right.setSpacing(6)
+        right.setContentsMargins(0,0,0,0)
+        # theme icon (shows opposite icon depending on current theme)
+        theme_icon_path = DARK_THEME_ICON if self.current_theme == "dark" else LIGHT_THEME_ICON
+        self.btn_theme_icon = IconButton(theme_icon_path, size=26)
+        self.btn_theme_icon.clicked.connect(self._on_theme_icon_clicked)
+        self.btn_theme_icon.setObjectName("themeIcon")
+        # telegram icon
+        self.btn_telegram_icon = IconButton(TELEGRAM_ICON if TELEGRAM_ICON.exists() else Path(""), size=26)
+        self.btn_telegram_icon.clicked.connect(lambda: send_telegram_async("🔔 Тест від PingMonitor: " + now_ts()))
+        self.btn_telegram_icon.setObjectName("telegramIcon")
+
+        right.addWidget(self.btn_theme_icon)
+        right.addWidget(self.btn_telegram_icon)
+        top_row.addLayout(right)
+        v.addLayout(top_row)
+
+        # search row
         search_row = QtWidgets.QHBoxLayout()
         self.search_input = QtWidgets.QLineEdit(); self.search_input.setPlaceholderText("Пошук... (IP, примітка, група)")
         self.search_input.textChanged.connect(self.on_search_changed)
         search_row.addWidget(self.search_input)
         v.addLayout(search_row)
 
+        # === TABLE ===
         self.table = QtWidgets.QTableWidget(0,5)
         self.table.setHorizontalHeaderLabels(["Група","IP-адреса","Примітка","Статус","Пінг (ms)"])
         self.table.setSelectionBehavior(QtWidgets.QAbstractItemView.SelectionBehavior.SelectRows)
@@ -399,66 +387,74 @@ class MainWindow(QtWidgets.QMainWindow):
         self.table.setColumnWidth(2,300)
         self.table.setColumnWidth(3,120)
         self.table.setColumnWidth(4,100)
-        v.addWidget(self.table)
 
+        # === BOTTOM BLOCK (BUTTONS + LOG) ===
+        bottom = QtWidgets.QWidget()
+        bottom_layout = QtWidgets.QVBoxLayout(bottom)
+        bottom_layout.setContentsMargins(0,0,0,0)
+
+        # Buttons row
         btn_row = QtWidgets.QHBoxLayout()
-        self.btn_start = QtWidgets.QPushButton("Запустити моніторинг")
-        self.btn_stop = QtWidgets.QPushButton("Зупинити")
-        self.btn_theme = QtWidgets.QPushButton("Світла тема")
-        self.btn_clear_log = QtWidgets.QPushButton("Очистити лог")
-        self.btn_test_telegram = QtWidgets.QPushButton("Тест Telegram")
-
-        self.btn_stop.setObjectName("danger")
-        self.btn_clear_log.setObjectName("danger")
-        self.btn_delete.setObjectName("danger")
-        self.btn_test_telegram.setObjectName("info")
-        self.btn_theme.setObjectName("accent")
+        self.btn_start = QtWidgets.QPushButton("Запустити моніторинг"); self.btn_start.setObjectName("start")
+        self.btn_stop = QtWidgets.QPushButton("Зупинити"); self.btn_stop.setObjectName("stop")
+        self.btn_clear_log = QtWidgets.QPushButton("Очистити лог"); self.btn_clear_log.setObjectName("clear")
 
         self.btn_start.clicked.connect(self.start_monitoring)
         self.btn_stop.clicked.connect(self.stop_monitoring)
-        self.btn_theme.clicked.connect(self.toggle_theme)
         self.btn_clear_log.clicked.connect(self.clear_log)
-        self.btn_test_telegram.clicked.connect(self.test_telegram)
-
         self.btn_stop.setEnabled(False)
 
         btn_row.addWidget(self.btn_start)
         btn_row.addWidget(self.btn_stop)
-        btn_row.addWidget(self.btn_theme)
         btn_row.addWidget(self.btn_clear_log)
-        btn_row.addWidget(self.btn_test_telegram)
         btn_row.addStretch()
 
         self.label_status = QtWidgets.QLabel("Статус: зупинено")
         btn_row.addWidget(self.label_status)
-        v.addLayout(btn_row)
 
-        v.addWidget(QtWidgets.QLabel("Журнал подій:"))
+        bottom_layout.addLayout(btn_row)
+
+        # Log block
+        log_title = QtWidgets.QLabel("Журнал подій:")
+        bottom_layout.addWidget(log_title)
+
         self.log_edit = QtWidgets.QPlainTextEdit()
         self.log_edit.setReadOnly(True)
         self.log_edit.setMaximumBlockCount(10000)
+
         try:
             if LOG_FILE.exists():
                 with open(LOG_FILE, "r", encoding="utf-8") as f:
                     self.log_edit.setPlainText(f.read())
-        except Exception:
+        except:
             pass
-        v.addWidget(self.log_edit, 1)
 
-    # table helpers (same as у тебе)
+        bottom_layout.addWidget(self.log_edit)
+
+        # === SPLITTER ===
+        splitter = QtWidgets.QSplitter(QtCore.Qt.Orientation.Vertical)
+        splitter.addWidget(self.table)
+        splitter.addWidget(bottom)
+        splitter.setStretchFactor(0, 3)
+        splitter.setStretchFactor(1, 2)
+
+        v.addWidget(splitter)
+
+        # styles: object names used for targeted styles
+        self._apply_styles()
+
+    # ---------------------------
+    # table helpers
+    # ---------------------------
     def _add_table_row(self, group: str, ip: str, note: str, status: str = "UNKNOWN", ping_ms: Optional[int]=None):
-        r = self.table.rowCount()
-        self.table.insertRow(r)
-
+        r = self.table.rowCount(); self.table.insertRow(r)
         item_group = QtWidgets.QTableWidgetItem(group)
         item_ip = QtWidgets.QTableWidgetItem(ip)
         item_note = QtWidgets.QTableWidgetItem(note)
         item_status = QtWidgets.QTableWidgetItem(status)
         item_ping = QtWidgets.QTableWidgetItem(str(ping_ms) if ping_ms is not None else "-")
-
         item_status.setTextAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
         item_ping.setTextAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
-
         color_hex = self.group_colors.get(group, "#dddddd")
         try:
             bg = QtGui.QColor(color_hex)
@@ -468,12 +464,8 @@ class MainWindow(QtWidgets.QMainWindow):
             item_group.setForeground(QtGui.QBrush(fg))
         except Exception:
             pass
-
-        self.table.setItem(r,0,item_group)
-        self.table.setItem(r,1,item_ip)
-        self.table.setItem(r,2,item_note)
-        self.table.setItem(r,3,item_status)
-        self.table.setItem(r,4,item_ping)
+        self.table.setItem(r,0,item_group); self.table.setItem(r,1,item_ip)
+        self.table.setItem(r,2,item_note); self.table.setItem(r,3,item_status); self.table.setItem(r,4,item_ping)
 
     def _find_row_by_ip(self, ip: str) -> Optional[int]:
         for r in range(self.table.rowCount()):
@@ -485,15 +477,14 @@ class MainWindow(QtWidgets.QMainWindow):
     def _load_entries_into_table(self):
         self.table.setRowCount(0)
         for e in self.cfg.get("entries", []):
-            group = e.get("group","")
-            ip = e.get("ip","")
-            note = e.get("note","")
-            self._add_table_row(group, ip, note, status="UNKNOWN", ping_ms=None)
+            self._add_table_row(e.get("group",""), e.get("ip",""), e.get("note",""), status="UNKNOWN", ping_ms=None)
 
     def _get_entries(self):
         return list(self.cfg.get("entries", []))
 
-    # actions
+    # ---------------------------
+    # actions: add / delete
+    # ---------------------------
     def on_add(self):
         group = self.combo_group.currentText().strip()
         ip = self.input_ip.text().strip()
@@ -503,49 +494,34 @@ class MainWindow(QtWidgets.QMainWindow):
         existing = [x for x in self.cfg.setdefault("entries", []) if x.get("ip")==ip and x.get("group")==group]
         if existing:
             QtWidgets.QMessageBox.information(self, "Інформація", "Такий IP уже існує в цій групі")
-            self.input_ip.clear()
-            self.input_note.clear()
-            return
-
+            self.input_ip.clear(); self.input_note.clear(); return
         entry = {"group": group, "ip": ip, "note": note}
-        self.cfg["entries"].append(entry)
-        save_config(self.cfg)
+        self.cfg["entries"].append(entry); save_config(self.cfg)
         self._add_table_row(group, ip, note, status="UNKNOWN", ping_ms=None)
         if group not in self.group_colors:
-            self.group_colors[group] = DEFAULT_GROUP_COLORS.get(group, "#DDDDDD")
-            save_group_colors(self.group_colors)
-        write_log(f"Додано {ip} ({note}) в групу {group}")
-        self._append_log(f"Додано {ip} ({note}) в групу {group}")
-        msg = (
-            f"▶️ До моніторингу додано:\n"
-            f"Група: {group}\n"
-            f"IP: {ip}\n"
-            f"Примітка: {note if note else '-'}"
-        )
+            self.group_colors[group] = DEFAULT_GROUP_COLORS.get(group, "#DDDDDD"); save_group_colors(self.group_colors)
+        write_log(f"Додано {ip} ({note}) в групу {group}"); self._append_log(f"Додано {ip} ({note}) в групу {group}")
+        msg = (f"▶️ До моніторингу додано:\nГрупа: {group}\nIP: {ip}\nПримітка: {note if note else '-'}")
         send_telegram_async(msg)
-        self.input_ip.clear()
-        self.input_note.clear()
+        self.input_ip.clear(); self.input_note.clear()
 
     def on_delete_selected(self):
         rows = sorted([idx.row() for idx in self.table.selectionModel().selectedRows()], reverse=True)
-        if not rows:
-            return
+        if not rows: return
         for r in rows:
-            ip_item = self.table.item(r,1)
-            note_item = self.table.item(r,2)
-            group_item = self.table.item(r,0)
-            ip = ip_item.text() if ip_item else ""
-            note = note_item.text() if note_item else ""
-            group = group_item.text() if group_item else ""
+            ip_item = self.table.item(r,1); note_item = self.table.item(r,2); group_item = self.table.item(r,0)
+            ip = ip_item.text() if ip_item else ""; note = note_item.text() if note_item else ""; group = group_item.text() if group_item else ""
             self.cfg["entries"] = [x for x in self.cfg.get("entries", []) if not (x.get("ip")==ip and x.get("group")==group)]
             self.table.removeRow(r)
-            write_log(f"Видалено {ip} ({note}) з групи {group}")
-            self._append_log(f"Видалено {ip} ({note}) з групи {group}")
+            write_log(f"Видалено {ip} ({note}) з групи {group}"); self._append_log(f"Видалено {ip} ({note}) з групи {group}")
             self.status_map.pop(ip, None)
             if self.monitor_thread and ip in self.monitor_thread.last_state:
                 self.monitor_thread.last_state.pop(ip, None)
         save_config(self.cfg)
 
+    # ---------------------------
+    # search/filter
+    # ---------------------------
     def on_search_changed(self, text: str):
         t = text.lower().strip()
         for r in range(self.table.rowCount()):
@@ -553,82 +529,64 @@ class MainWindow(QtWidgets.QMainWindow):
             for c in range(self.table.columnCount()):
                 it = self.table.item(r,c)
                 if it and t in it.text().lower():
-                    visible = True
-                    break
+                    visible = True; break
             self.table.setRowHidden(r, not visible)
 
+    # ---------------------------
+    # monitoring control
+    # ---------------------------
     def start_monitoring(self):
         if not self.cfg.get("entries"):
-            QtWidgets.QMessageBox.warning(self, "Увага", "Додайте хоча б один IP для моніторингу")
-            return
-
-        interval = self.cfg.get("ping_interval", 5)
-        timeout = self.cfg.get("ping_timeout", 1)
+            QtWidgets.QMessageBox.warning(self, "Увага", "Додайте хоча б один IP для моніторингу"); return
+        interval = self.cfg.get("ping_interval", 5); timeout = self.cfg.get("ping_timeout", 1)
         self.monitor_thread = MonitorThread(self._get_entries, interval_sec=interval, timeout_s=timeout)
-        self.monitor_thread.updated.connect(self._on_update_from_thread)
-        self.monitor_thread.log.connect(self._append_log)
-
-        send_telegram_async("📡 Моніторинг запущено")
-        self._append_log("Моніторинг запущено")
-
+        self.monitor_thread.updated.connect(self._on_update_from_thread); self.monitor_thread.log.connect(self._append_log)
+        send_telegram_async("📡 Моніторинг запущено"); self._append_log("Моніторинг запущено")
         for e in self.cfg.get("entries", []):
-            ip = e.get("ip")
-            group = e.get("group","")
-            note = e.get("note","")
+            ip = e.get("ip"); group = e.get("group",""); note = e.get("note","")
             try:
                 ok, rtt, used = ping_host(ip, timeout_s=timeout)
             except Exception:
                 ok, rtt, used = False, None, None
             self.monitor_thread.last_state[ip] = ok
             status_emoji = "🟢" if ok else "🔴"
-            msg = (
-                f"{status_emoji} Почато моніторинг:\n"
-                f"Група: {group}\n"
-                f"IP: {ip}\n"
-                f"Примітка: {note if note else '-'}\n"
-                f"Статус: {'ONLINE' if ok else 'OFFLINE'}"
-            )
-            if ok and rtt is not None:
-                msg += f" ({rtt} ms)"
+            msg = (f"{status_emoji} Почато моніторинг:\nГрупа: {group}\nIP: {ip}\nПримітка: {note if note else '-'}\nСтатус: {'ONLINE' if ok else 'OFFLINE'}")
+            if ok and rtt is not None: msg += f" ({rtt} ms)"
             send_telegram_async(msg)
             self._on_update_table_row(ip, "ONLINE" if ok else "OFFLINE", rtt)
-
         self.monitor_thread.start()
-        self.btn_start.setEnabled(False)
-        self.btn_stop.setEnabled(True)
-        self.label_status.setText("Статус: моніторинг запущено")
+        self.btn_start.setEnabled(False); self.btn_stop.setEnabled(True); self.label_status.setText("Статус: моніторинг запущено")
         write_log("Моніторинг запущено")
 
     def stop_monitoring(self):
         if self.monitor_thread and self.monitor_thread.isRunning():
             self.monitor_thread.stop()
-        self.btn_start.setEnabled(True)
-        self.btn_stop.setEnabled(False)
-        self.label_status.setText("Статус: зупинено")
-        self._append_log("Моніторинг зупинено")
-        write_log("Моніторинг зупинено")
+        self.btn_start.setEnabled(True); self.btn_stop.setEnabled(False); self.label_status.setText("Статус: зупинено")
+        self._append_log("Моніторинг зупинено"); write_log("Моніторинг зупинено")
 
+    # ---------------------------
+    # updates from thread
+    # ---------------------------
     def _on_update_from_thread(self, ip: str, state: str, rtt):
         self._on_update_table_row(ip, state, rtt)
 
     def _on_update_table_row(self, ip: str, state: str, rtt):
         r = self._find_row_by_ip(ip)
         if r is None:
-            group = self.combo_group.currentText() if self.combo_group.currentText() else "Без групи"
-            note = ""
-            self.cfg.setdefault("entries", []).append({"group": group, "ip": ip, "note": note})
-            save_config(self.cfg)
-            self._add_table_row(group, ip, note, status=state, ping_ms=rtt)
-            return
+            group = self.combo_group.currentText() or "Без групи"; note = ""
+            self.cfg.setdefault("entries", []).append({"group": group, "ip": ip, "note": note}); save_config(self.cfg)
+            self._add_table_row(group, ip, note, status=state, ping_ms=rtt); return
         status_text = "🟢 ONLINE" if state == "ONLINE" else "🔴 OFFLINE"
-        self.table.item(r,3).setText(status_text)
-        self.table.item(r,4).setText(str(rtt) if rtt is not None else "-")
+        self.table.item(r,3).setText(status_text); self.table.item(r,4).setText(str(rtt) if rtt is not None else "-")
         if state == "ONLINE":
             self.table.item(r,3).setForeground(QtGui.QBrush(QtGui.QColor("#00c853")))
         else:
             self.table.item(r,3).setForeground(QtGui.QBrush(QtGui.QColor("#f39c12")))
         self.status_map[ip] = (state == "ONLINE")
 
+    # ---------------------------
+    # log UI
+    # ---------------------------
     def _append_log(self, text: str):
         write_log(text)
         self.log_edit.appendPlainText(f"[{now_ts()}] {text}")
@@ -641,73 +599,113 @@ class MainWindow(QtWidgets.QMainWindow):
         self.log_edit.setPlainText("")
         self._append_log("Лог очищено")
 
-    def toggle_theme(self):
+    # ---------------------------
+    # theme toggle
+    # ---------------------------
+    def _on_theme_icon_clicked(self):
+        # toggle theme and update icon
         if self.current_theme == "dark":
-            self.apply_light_theme()
-            self.current_theme = "light"
-            self.btn_theme.setText("Темна тема")
+            self.apply_light_theme(); self.current_theme = "light"
+            if LIGHT_THEME_ICON.exists(): self.btn_theme_icon.setIcon(QIcon(str(LIGHT_THEME_ICON)))
         else:
-            self.apply_dark_theme()
-            self.current_theme = "dark"
-            self.btn_theme.setText("Світла тема")
+            self.apply_dark_theme(); self.current_theme = "dark"
+            if DARK_THEME_ICON.exists(): self.btn_theme_icon.setIcon(QIcon(str(DARK_THEME_ICON)))
 
     def apply_dark_theme(self):
-        self.setStyleSheet("""
-            QWidget { background-color: #0f1417; color: #d7e6dd; font-family: 'Segoe UI'; }
-            QTableWidget { background-color: #0b0d0e; color: #d7e6dd; gridline-color: #121212; }
-            QHeaderView::section { background-color: #0b0d0e; color: #a9cbb7; }
-            QPushButton { background-color: #111314; color: #d7e6dd; border: 1px solid #1f7a1f; padding:6px; border-radius:6px; }
-            QPushButton:hover { background-color: #17201a; }
-            QPushButton#danger { background-color: #4a1f1f; border:1px solid #800; color:#fff; }
-            QPushButton#info { background-color: #e6f5ff; border:1px solid #60a5fa; color:#003366; }
-            QPushButton#accent { background-color: #ffb366; border:1px solid #ff8c1a; color:#222; }
-            QLineEdit { background-color: #0b0d0e; color: #d7e6dd; border: 1px solid #111; padding:6px; border-radius:6px; }
-            QPlainTextEdit { background-color: #060708; color: #cfead6; border: 1px solid #111; border-radius:8px; padding:8px; }
-            QComboBox { background-color: #0b0d0e; color: #d7e6dd; border:1px solid #111; padding:6px; border-radius:6px;}
+        self.current_theme = "dark"
+        self.setStyleSheet(f"""
+            QWidget {{ background-color: #2e2f30; color: #e6e7e8; font-family: 'Segoe UI'; }}
+            QTableWidget {{ background-color: #333536; color: #e6e7e8; gridline-color: #3b3b3b; }}
+            QHeaderView::section {{ background-color: #38393a; color: #d7e6dd; }}
+            QLineEdit {{ background-color: #2f3132; color: #ddd; border:1px solid #3a3a3a; padding:6px; border-radius:6px; }}
+            QPlainTextEdit {{ background-color: #2b2c2d; color: #e6e7e8; border:1px solid #3a3a3a; border-radius:6px; padding:8px; }}
+            /* Buttons default: dimmed borders (darker versions), bright on hover */
+            QPushButton#start {{
+                background: transparent; color: #e6e7e8; border:2px solid rgba(0,255,8,0.25); padding:6px 12px; border-radius:6px;
+            }}
+            QPushButton#start:hover {{ border-color: {HOVER_GREEN}; box-shadow: none; }}
+            QPushButton#add {{
+                background: transparent; color:#e6e7e8; border:2px solid rgba(0,255,8,0.25); padding:6px 12px; border-radius:6px;
+            }}
+            QPushButton#add:hover {{ border-color: {HOVER_GREEN}; }}
+            QPushButton#stop {{
+                background: transparent; color:#e6e7e8; border:2px solid rgba(255,0,0,0.18); padding:6px 12px; border-radius:6px;
+            }}
+            QPushButton#stop:hover {{ border-color: {HOVER_RED}; }}
+            QPushButton#clear {{
+                background: transparent; color:#e6e7e8; border:2px solid rgba(255,247,0,0.18); padding:6px 12px; border-radius:6px;
+            }}
+            QPushButton#clear:hover {{ border-color: {HOVER_YELLOW}; }}
+            QPushButton#delete {{
+                background: transparent; color:#e6e7e8; border:2px solid rgba(255,0,0,0.2); padding:6px 12px; border-radius:6px;
+            }}
+            QPushButton#delete:hover {{ border-color: {HOVER_RED}; }}
+            /* Icon buttons in top-right */
+            QToolButton#themeIcon, QToolButton#telegramIcon {{
+                background: transparent; border:2px solid rgba(255,255,255,0.06); border-radius:14px; padding:4px;
+            }}
+            QToolButton#themeIcon:hover, QToolButton#telegramIcon:hover {{
+                border-color: rgba(255,255,255,0.2);
+                filter: brightness(1.15);
+            }}
         """)
-        self._apply_button_object_styles()
+        # refresh icons depending on theme
+        if DARK_THEME_ICON.exists():
+            self.btn_theme_icon.setIcon(QIcon(str(DARK_THEME_ICON)))
 
     def apply_light_theme(self):
-        self.setStyleSheet("""
-            QWidget { background-color: #f6f8f7; color: #071312; font-family: 'Segoe UI'; }
-            QTableWidget { background-color: #ffffff; color: #071312; gridline-color: #ddd; border:1px solid #d0d0d0; }
-            QHeaderView::section { background-color: #eef6ee; color: #1f6a1f; }
-            QPushButton { background-color: #e9f5ef; color: #0b1a15; border: 1px solid #9ad19f; padding:6px; border-radius:6px; }
-            QPushButton:hover { background-color: #dff0e6; }
-            QPushButton#danger { background-color: #ffdddd; border:1px solid #ff4d4d; color:#660000; }
-            QPushButton#info { background-color: #e6f5ff; border:1px solid #60a5fa; color:#003366; }
-            QPushButton#accent { background-color: #ffefdb; border:1px solid #ff8c1a; color:#222; }
-            QLineEdit { background-color: #ffffff; color: #071312; border: 1px solid #ddd; padding:6px; border-radius:6px; }
-            QPlainTextEdit { background-color: #ffffff; color: #071312; border: 1px solid #ddd; border-radius:8px; padding:8px; }
-            QComboBox { background-color: #ffffff; color: #071312; border:1px solid #ddd; padding:6px; border-radius:6px;}
+        self.current_theme = "light"
+        self.setStyleSheet(f"""
+            QWidget {{ background-color: #f2f2f2; color: #0b0b0b; font-family: 'Segoe UI'; }}
+            QTableWidget {{ background-color: #ffffff; color: #0b0b0b; gridline-color: #ddd; }}
+            QHeaderView::section {{ background-color: #f0f0f0; color: #2b2b2b; }}
+            QLineEdit {{ background-color: #ffffff; color: #0b0b0b; border:1px solid #d0d0d0; padding:6px; border-radius:6px; }}
+            QPlainTextEdit {{ background-color: #ffffff; color: #0b0b0b; border:1px solid #d0d0d0; border-radius:6px; padding:8px; }}
+            QPushButton#start {{
+                background: transparent; color: #0b0b0b; border:2px solid rgba(0,255,8,0.18); padding:6px 12px; border-radius:6px;
+            }}
+            QPushButton#start:hover {{ border-color: {HOVER_GREEN}; }}
+            QPushButton#add {{
+                background: transparent; color:#0b0b0b; border:2px solid rgba(0,255,8,0.18); padding:6px 12px; border-radius:6px;
+            }}
+            QPushButton#add:hover {{ border-color: {HOVER_GREEN}; }}
+            QPushButton#stop {{
+                background: transparent; color:#0b0b0b; border:2px solid rgba(255,0,0,0.18); padding:6px 12px; border-radius:6px;
+            }}
+            QPushButton#stop:hover {{ border-color: {HOVER_RED}; }}
+            QPushButton#clear {{
+                background: transparent; color:#0b0b0b; border:2px solid rgba(255,247,0,0.18); padding:6px 12px; border-radius:6px;
+            }}
+            QPushButton#clear:hover {{ border-color: {HOVER_YELLOW}; }}
+            QPushButton#delete {{
+                background: transparent; color:#0b0b0b; border:2px solid rgba(255,0,0,0.16); padding:6px 12px; border-radius:6px;
+            }}
+            QPushButton#delete:hover {{ border-color: {HOVER_RED}; }}
+            QToolButton#themeIcon, QToolButton#telegramIcon {{
+                background: transparent; border:2px solid rgba(0,0,0,0.06); border-radius:14px; padding:4px;
+            }}
+            QToolButton#themeIcon:hover, QToolButton#telegramIcon:hover {{
+                border-color: rgba(0,0,0,0.18);
+                filter: brightness(1.08);
+            }}
         """)
-        self._apply_button_object_styles()
+        if LIGHT_THEME_ICON.exists():
+            self.btn_theme_icon.setIcon(QIcon(str(LIGHT_THEME_ICON)))
 
-    def _apply_button_object_styles(self):
-        for btn in [self.btn_stop, self.btn_clear_log, self.btn_delete]:
-            btn.setProperty("class", "danger")
-        self.btn_test_telegram.setProperty("class", "info")
-        self.btn_theme.setProperty("class", "accent")
-        for w in [self.btn_stop, self.btn_clear_log, self.btn_delete, self.btn_test_telegram, self.btn_theme]:
-            w.style().unpolish(w)
-            w.style().polish(w)
-
-    def test_telegram(self):
-        msg = f"🔔 Тест від PingMonitor: {now_ts()}"
-        dispatched = send_telegram(msg)
-        if dispatched:
-            self._append_log("Тестове повідомлення відправлено в Telegram")
+    def _apply_styles(self):
+        # Called at UI build: ensure icons reflect theme
+        if self.current_theme == "dark":
+            if DARK_THEME_ICON.exists(): self.btn_theme_icon.setIcon(QIcon(str(DARK_THEME_ICON)))
         else:
-            self._append_log("Не вдалось надіслати тестове повідомлення в Telegram (перевір токен/чат)")
+            if LIGHT_THEME_ICON.exists(): self.btn_theme_icon.setIcon(QIcon(str(LIGHT_THEME_ICON)))
 
     # ---------------------------
-    # Auto-update (GitHub Releases)
+    # Auto-update helpers
     # ---------------------------
     def auto_update_check(self):
         try:
             upd = check_for_updates()
-            if not upd:
-                return
+            if not upd: return
             latest_ver, url, changelog = upd
             dlg = QtWidgets.QMessageBox(self)
             dlg.setWindowTitle("Доступне оновлення")
@@ -719,22 +717,13 @@ class MainWindow(QtWidgets.QMainWindow):
                 if path:
                     QtWidgets.QMessageBox.information(self, "Оновлення", "Файл завантажено. Інсталятор буде запущено.")
                     try:
-                        if sys.platform.startswith("win"):
-                            os.startfile(path)
-                        else:
-                            subprocess.Popen([str(path)])
+                        os.startfile(path)
                     except Exception:
-                        try:
-                            subprocess.Popen([str(path)], shell=True)
-                        except Exception as ex:
-                            write_log(f"Failed to launch installer: {ex}")
+                        subprocess.Popen([path], shell=True)
                     QtCore.QCoreApplication.quit()
         except Exception as e:
             write_log(f"auto_update_check error: {e}")
 
-# ---------------------------
-# Auto-update helpers
-# ---------------------------
 def is_newer_version(v1: str, v2: str) -> bool:
     try:
         a = [int(x) for x in v1.split(".")]
@@ -745,44 +734,30 @@ def is_newer_version(v1: str, v2: str) -> bool:
 
 def check_for_updates():
     try:
-        response = requests.get(UPDATE_JSON_URL, timeout=5)
-        response.raise_for_status()
-        data = response.json()
-
-        latest = data.get("version")
-        url = data.get("download_url")
+        r = requests.get(UPDATE_JSON_URL, timeout=6)
+        r.raise_for_status()
+        data = r.json()
+        latest = data.get("version", "")
+        url = data.get("download_url", "")
         changelog = data.get("changelog", "")
-
-        if not latest or not url:
-            return None
-
-        if is_newer_version(latest, CURRENT_VERSION):
+        if latest and url and is_newer_version(latest, CURRENT_VERSION):
             return latest, url, changelog
-
-        return None
     except Exception as e:
         write_log(f"Update check failed: {e}")
-        return None
+    return None
 
 def download_update(url: str) -> Optional[str]:
     try:
         temp_dir = Path(tempfile.gettempdir())
         filename = url.split("/")[-1]
         out_path = temp_dir / filename
-
         write_log(f"Downloading update to {out_path}")
-
-        r = requests.get(url, stream=True, timeout=10)
-        r.raise_for_status()
-
+        r = requests.get(url, stream=True, timeout=15); r.raise_for_status()
         with open(out_path, "wb") as f:
             for chunk in r.iter_content(chunk_size=8192):
-                if chunk:
-                    f.write(chunk)
-
+                if chunk: f.write(chunk)
         write_log("Update downloaded successfully")
         return str(out_path)
-
     except Exception as e:
         write_log(f"Download update error: {e}")
         return None
@@ -793,11 +768,8 @@ def download_update(url: str) -> Optional[str]:
 def main():
     ensure_default_config()
     app = QtWidgets.QApplication(sys.argv)
-    try:
-        if ICON_FILE.exists():
-            app.setWindowIcon(QIcon(str(ICON_FILE)))
-    except Exception:
-        pass
+    if ICON_FILE.exists():
+        app.setWindowIcon(QIcon(str(ICON_FILE)))
     win = MainWindow()
     win.show()
     sys.exit(app.exec())
